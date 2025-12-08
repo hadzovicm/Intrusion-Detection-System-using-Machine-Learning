@@ -7,10 +7,13 @@ from sklearn.metrics import (
     classification_report,
     fbeta_score,
 )
+from sklearn.model_selection import cross_val_score
 from preprocess import (
     X_train_vec,
+    X_val_vec,
     X_test_vec,
     y_train,
+    y_val,
     y_test,
     word_tfidf,
     char_tfidf,
@@ -19,36 +22,51 @@ from preprocess import (
 model = LinearSVC(class_weight="balanced")
 model.fit(X_train_vec, y_train)
 
-# Default SVC threshold (0) tends to over-flag; tune a cutoff
-# that favors precision (beta=0.5) while keeping recall reasonable.
-scores = model.decision_function(X_test_vec)
-threshold_grid = sorted(
-    set([0.0] + list(np.percentile(scores, np.linspace(1, 99, 80))))
-)
+# Sanity check: train vs validation at default threshold (0)
+train_preds = model.predict(X_train_vec)
+val_preds_base = model.predict(X_val_vec)
+print("TRAIN ACCURACY (threshold=0):", accuracy_score(y_train, train_preds))
+print("VAL ACCURACY (threshold=0):", accuracy_score(y_val, val_preds_base))
+print("VAL REPORT (threshold=0):\n", classification_report(y_val, val_preds_base))
+val_cm_base = confusion_matrix(y_val, val_preds_base)
 
-base_preds = model.predict(X_test_vec)
-base_cm = confusion_matrix(y_test, base_preds)
-print("ACCURACY (threshold=0):", accuracy_score(y_test, base_preds))
-print("CONFUSION MATRIX (threshold=0):\n", base_cm)
-print("REPORT (threshold=0):\n", classification_report(y_test, base_preds))
+# Tune threshold on the validation set only to avoid leaking test information
+val_scores = model.decision_function(X_val_vec)
+threshold_grid = sorted(
+    set([0.0] + list(np.percentile(val_scores, np.linspace(1, 99, 80))))
+)
 
 best_thresh = 0.0
 best_fbeta = -1.0
-best_stats = base_cm.ravel().tolist()
+best_stats = val_cm_base.ravel().tolist()
 
 for t in threshold_grid:
-    preds = (scores >= t).astype(int)
-    fbeta = fbeta_score(y_test, preds, beta=0.5)
+    preds = (val_scores >= t).astype(int)
+    fbeta = fbeta_score(y_val, preds, beta=0.5)
     if fbeta > best_fbeta:
         best_fbeta = fbeta
-        best_stats = list(confusion_matrix(y_test, preds).ravel())
+        best_stats = list(confusion_matrix(y_val, preds).ravel())
         best_thresh = t
 
 tn, fp, fn, tp = best_stats
-recall = tp / (tp + fn)
+recall = tp / (tp + fn) if (tp + fn) else 0.0
 precision = tp / (tp + fp) if (tp + fp) else 0.0
 print(
-    f"Selected threshold={best_thresh:.4f} (precision={precision:.4f}, recall={recall:.4f}, FP={fp}, FN={fn}, TP={tp}, TN={tn})"
+    f"Selected threshold={best_thresh:.4f} on validation (precision={precision:.4f}, recall={recall:.4f}, FP={fp}, FN={fn}, TP={tp}, TN={tn})"
+)
+
+# Evaluate on the untouched test set using the tuned threshold
+test_scores = model.decision_function(X_test_vec)
+test_preds = (test_scores >= best_thresh).astype(int)
+test_cm = confusion_matrix(y_test, test_preds)
+print("TEST ACCURACY:", accuracy_score(y_test, test_preds))
+print("TEST CONFUSION MATRIX:\n", test_cm)
+print("TEST REPORT:\n", classification_report(y_test, test_preds))
+
+# Cross-validation on the training split to gauge stability
+cv_scores = cross_val_score(model, X_train_vec, y_train, cv=5, scoring="f1")
+print(
+    f"5-fold CV F1 on train split: mean={cv_scores.mean():.4f}, std={cv_scores.std():.4f}"
 )
 
 with open("models/model.pkl", "wb") as f:

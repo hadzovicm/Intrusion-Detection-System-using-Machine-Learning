@@ -33,18 +33,28 @@ df["full_request"] = df["Method"] + " " + df["URL"] + " " + df["content"]
 X = df["full_request"]
 y = df["classification"]
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y,
+# Split into train/test, then carve validation out of the training split.
+X_train_full, X_test, y_train_full, y_test = train_test_split(
+    X,
+    y,
     test_size=0.30,
     stratify=y,
-    random_state=42
+    random_state=42,
+)
+
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train_full,
+    y_train_full,
+    test_size=0.20,
+    stratify=y_train_full,
+    random_state=42,
 )
 
 word_tfidf = TfidfVectorizer(
     max_features=20000,
     ngram_range=(1, 4),
     token_pattern=r"(?u)\b[\w\-/+=@.]+|\S",
-    sublinear_tf=True
+    sublinear_tf=True,
 )
 
 char_tfidf = TfidfVectorizer(
@@ -52,12 +62,16 @@ char_tfidf = TfidfVectorizer(
     ngram_range=(3, 6),
     min_df=2,
     max_features=50000,
-    sublinear_tf=True
+    sublinear_tf=True,
 )
 
 X_train_word = word_tfidf.fit_transform(X_train)
 X_train_char = char_tfidf.fit_transform(X_train)
 X_train_vec = hstack([X_train_word, X_train_char])
+
+X_val_word = word_tfidf.transform(X_val)
+X_val_char = char_tfidf.transform(X_val)
+X_val_vec = hstack([X_val_word, X_val_char])
 
 X_test_word = word_tfidf.transform(X_test)
 X_test_char = char_tfidf.transform(X_test)
@@ -66,4 +80,5 @@ X_test_vec = hstack([X_test_word, X_test_char])
 if __name__ == "__main__":
     print("Preprocessing complete!")
     print("Train shape:", X_train_vec.shape)
+    print("Val shape:", X_val_vec.shape)
     print("Test shape:", X_test_vec.shape)
